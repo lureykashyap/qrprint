@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="ne">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QR for Print — Admin Desk</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+:root{--navy:#14213d;--blue:#3157d5;--pale:#edf2ff;--ink:#1c2740;--muted:#68738b;--line:#dfe5ef;--bg:#f4f6fb;--white:#fff;--green:#147d55;--red:#b42318}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{background:var(--navy);color:white;padding:15px max(16px,calc((100% - 1120px)/2));display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.brand{font-weight:850;font-size:20px}.brand small{display:block;font-size:12px;color:#c7d3f4;font-weight:500}
+main{max-width:1120px;margin:22px auto;padding:0 15px 36px}.card{background:var(--white);border:1px solid var(--line);border-radius:16px;padding:20px;margin-bottom:16px;box-shadow:0 5px 20px #15244808}
+h1{font-size:25px;margin:0 0 7px}h2{font-size:18px;margin:0 0 10px}p{color:var(--muted);margin:4px 0 14px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.field{display:flex;flex-direction:column;gap:6px;margin:10px 0}.field label{font-size:13px;font-weight:750;color:#344054}
+input,select{width:100%;border:1px solid #cbd4e4;border-radius:10px;padding:11px 12px;font:inherit;color:var(--ink);background:white;min-width:0}
+button{border:0;border-radius:10px;background:var(--blue);color:white;padding:11px 15px;font:700 14px system-ui;cursor:pointer}button.secondary{background:var(--pale);color:#27429b}button.outline{background:transparent;color:inherit;border:1px solid #b9c3d7}button:disabled{opacity:.5;cursor:not-allowed}
+.row{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.hidden{display:none!important}.notice{padding:11px 13px;border-radius:10px;background:#edf2ff;color:#2442a0;margin:10px 0}.notice.error{background:#fff0ef;color:var(--red)}.notice.success{background:#e9f8f0;color:#116344}
+.small{font-size:12px;color:var(--muted)}.pill{background:#e8edff;color:#2944a0;padding:4px 9px;border-radius:99px;font-size:12px;font-weight:800}
+#qrcode{min-height:190px;display:flex;align-items:center;justify-content:center;margin:10px 0}#reader{max-width:500px;margin:12px auto}
+.preview{width:100%;height:460px;border:1px solid var(--line);border-radius:10px;background:#f9fafc}.previewImage{display:block;max-width:100%;max-height:500px;object-fit:contain;margin:10px auto;border-radius:8px}
+.qrbox{text-align:center;border:1px dashed #bdc9df;border-radius:12px;padding:14px}.job{border:1px solid var(--line);border-radius:10px;padding:12px;margin:8px 0;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}.job strong{overflow-wrap:anywhere}
+hr{border:0;border-top:1px solid var(--line);margin:18px 0}footer{text-align:center;padding:18px;color:var(--muted);font-size:12px}
+@media(max-width:700px){.grid{grid-template-columns:1fr}main{margin-top:12px}.card{padding:15px}.preview{height:340px}}
+@media print{header,.no-print,footer{display:none!important}body{background:white}.card{box-shadow:none;border:0}}
+</style>
+</head>
+<body>
+<header>
+ <div class="brand">▦ QR for Print <small>Admin QR · Upload · Preview · Print</small></div>
+ <div class="row"><span id="userBadge" class="small"></span><button id="logoutBtn" class="outline hidden" onclick="signOut()">Logout</button></div>
+</header>
+<main>
+ <section id="setup" class="card">
+  <h1>पहिलो पटक Supabase Connect गर्नुहोस्</h1>
+  <p>Supabase Project URL र Publishable/Anon Key राख्नुहोस्। यो HTML HTTPS hosting मा राखेपछि QR scan गर्ने फोनबाट पनि खुल्छ।</p>
+  <div class="grid">
+   <div class="field"><label>Supabase Project URL</label><input id="sbUrl" placeholder="https://your-project.supabase.co"></div>
+   <div class="field"><label>Publishable / anon key</label><input id="sbKey" placeholder="sb_publishable_... वा anon key"></div>
+  </div>
+  <div class="row"><button onclick="connect()">Connect</button><button class="secondary" onclick="toggleSql()">SQL Setup देखाउनुहोस्</button></div>
+  <div id="setupMsg" class="notice hidden"></div>
+  <div id="sqlWrap" class="hidden"><hr><h2>Supabase SQL Editor मा यो SQL चलाउनुहोस्</h2>
+<pre id="sqlText" style="white-space:pre-wrap;overflow-wrap:anywhere;background:#101b36;color:#eaf0ff;padding:14px;border-radius:10px">-- QR TO PRINT: table + RLS fix (safe to rerun)
+-- IMPORTANT: Replace YOUR_ADMIN_EMAIL with the exact email used in Supabase Auth.
+create extension if not exists pgcrypto;
+
+create table if not exists public.print_sessions (
+ id uuid primary key default gen_random_uuid(),
+ admin_id uuid not null references auth.users(id) on delete cascade,
+ status text not null default 'waiting',
+ file_path text, file_name text, mime_type text, file_size bigint,
+ paper_size text not null default 'A4',
+ copies integer not null default 1,
+ customer_name text, customer_phone text, customer_note text,
+ printer_id uuid, uploaded_at timestamptz, approved_at timestamptz,
+ printed_at timestamptz, expires_at timestamptz not null default (now() + interval '24 hours'),
+ created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+
+-- Add columns safely when an older version of the table already exists.
+alter table public.print_sessions add column if not exists copies integer not null default 1;
+alter table public.print_sessions add column if not exists customer_name text;
+alter table public.print_sessions add column if not exists customer_phone text;
+alter table public.print_sessions add column if not exists customer_note text;
+alter table public.print_sessions add column if not exists printer_id uuid;
+alter table public.print_sessions add column if not exists uploaded_at timestamptz;
+alter table public.print_sessions add column if not exists approved_at timestamptz;
+alter table public.print_sessions add column if not exists printed_at timestamptz;
+alter table public.print_sessions add column if not exists expires_at timestamptz not null default (now() + interval '24 hours');
+alter table public.print_sessions add column if not exists updated_at timestamptz not null default now();
+create index if not exists print_sessions_admin_created_idx on public.print_sessions(admin_id, created_at desc);
+alter table public.print_sessions enable row level security;
+
+-- Remove policies from previous versions to avoid duplicate policy errors.
+drop policy if exists "Admin can manage print sessions" on public.print_sessions;
+drop policy if exists "qr_admin_insert_sessions" on public.print_sessions;
+drop policy if exists "QR visitors can read session" on public.print_sessions;
+drop policy if exists "QR visitor can mark waiting session uploaded" on public.print_sessions;
+
+-- Admin can manage only rows belonging to their own auth user and allowlisted email.
+create policy "Admin can manage print sessions" on public.print_sessions
+for all to authenticated
+using (auth.uid() = admin_id and lower(coalesce(auth.jwt()->>'email','')) = lower('YOUR_ADMIN_EMAIL'))
+with check (auth.uid() = admin_id and lower(coalesce(auth.jwt()->>'email','')) = lower('YOUR_ADMIN_EMAIL'));
+
+-- Prototype QR customer access. For public production use a one-time token + Edge Function.
+create policy "QR visitors can read session" on public.print_sessions
+for select to anon, authenticated using (expires_at > now());
+create policy "QR visitor can mark waiting session uploaded" on public.print_sessions
+for update to anon, authenticated using (status = 'waiting' and expires_at > now())
+with check (status = 'uploaded' and expires_at > now());
+
+-- Private upload bucket and policies.
+insert into storage.buckets (id,name,public,file_size_limit,allowed_mime_types)
+values ('print-files','print-files',false,26214400,array['application/pdf','image/png','image/jpeg','image/webp','image/gif','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document'])
+on conflict (id) do update set public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
+drop policy if exists "QR upload to print-files" on storage.objects;
+drop policy if exists "QR read print-files" on storage.objects;
+drop policy if exists "Admin read print-files" on storage.objects;
+drop policy if exists "Admin delete print-files" on storage.objects;
+create policy "QR upload to print-files" on storage.objects for insert to anon, authenticated with check (bucket_id='print-files');
+create policy "QR read print-files" on storage.objects for select to authenticated using (bucket_id='print-files' and lower(coalesce(auth.jwt()->>'email','')) = lower('YOUR_ADMIN_EMAIL'));
+create policy "Admin delete print-files" on storage.objects for delete to authenticated using (bucket_id='print-files' and lower(coalesce(auth.jwt()->>'email','')) = lower('YOUR_ADMIN_EMAIL'));
+</pre>
+   <div class="row"><button class="secondary" onclick="copySql()">Copy SQL</button></div>
+   <p class="small">सुरक्षाका लागि SQL मा admin@example.com लाई वास्तविक admin email ले बदल्नुहोस्। यो starter setup हो; public upload policies खुला छन्, त्यसैले production मा one-time token र server-side validation भएको Supabase Edge Function प्रयोग गर्नु राम्रो हुन्छ।</p>
+  </div>
+ </section>
+
+ <section id="auth" class="card hidden">
+  <h1>Admin Login</h1><p>QR generate गर्न admin account बाट मात्र login गर्नुहोस्। Admin email SQL policy मा allowlist गरिएको email सँग ठ्याक्कै मिल्नुपर्छ।</p>
+  <div class="grid"><div class="field"><label>Admin Email</label><input id="email" type="email" autocomplete="username" placeholder="admin@example.com"></div><div class="field"><label>Password</label><input id="password" type="password" autocomplete="current-password" placeholder="Password"></div></div>
+  <div class="row"><button onclick="adminSignIn()">Admin Login</button><button class="secondary" onclick="adminSignUp()">Create Admin Account</button></div>
+  <div id="authMsg" class="notice hidden"></div>
+ </section>
+
+ <section id="adminApp" class="hidden">
+  <div class="card">
+   <div class="row" style="justify-content:space-between"><div><h1>Admin Dashboard</h1><p>QR for Print generate गर्नुहोस्। ग्राहकले QR scan गरेपछि आफ्नो file upload गर्न सक्छ।</p></div><span class="pill">ADMIN</span></div>
+   <div class="row" style="margin:10px 0 16px"><button class="secondary" onclick="copyAdminPolicyFix()">Copy Admin RLS Fix SQL</button><span class="small">RLS error आएमा यो SQL Supabase SQL Editor मा चलाउनुहोस्।</span></div>
+   <div class="grid">
+    <div><h2>नयाँ Print QR</h2>
+     <div class="field"><label>Default Paper Size</label><select id="defaultPaper"><option>A4</option><option>Letter</option><option>Receipt (80mm)</option><option>Original</option></select></div>
+     <div class="field"><label>QR को नाम / Counter (ऐच्छिक)</label><input id="counterName" placeholder="जस्तै: Counter 1"></div>
+     <button onclick="generateSession()">Generate QR for Print</button>
+     <div id="adminMsg" class="notice hidden"></div>
+    </div>
+    <div class="qrbox"><strong>Generated QR</strong><div id="qrcode"></div><div id="qrLabel" class="small">Generate QR गरेपछि यहाँ देखिन्छ।</div><div class="row" style="justify-content:center;margin-top:8px"><button class="secondary" onclick="downloadQr()">Download QR</button><button class="secondary" onclick="printQr()">Print QR</button></div></div>
+   </div>
+  </div>
+  <div class="card"><div class="row" style="justify-content:space-between"><h2>Print Queue</h2><button class="secondary" onclick="loadSessions()">Refresh</button></div><div id="queue"><p>अहिलेसम्म QR session छैन।</p></div></div>
+  <div class="card">
+   <h2>Printer Settings</h2><p>Printer IP र protocol यहाँ save गर्न सकिन्छ। साधारण HTML/browser ले IP मा raw ESC/POS वा IPP command सिधै पठाउन सक्दैन; actual direct print का लागि LAN print bridge/agent वा printer server चाहिन्छ।</p>
+   <div class="grid">
+    <div class="field"><label>Printer IP Address</label><input id="printerIp" placeholder="192.168.1.100"></div>
+    <div class="field"><label>Port</label><input id="printerPort" type="number" placeholder="9100" value="9100"></div>
+    <div class="field"><label>Protocol</label><select id="printerProtocol"><option value="ipp">IPP / Office Printer</option><option value="escpos">ESC/POS Thermal</option><option value="browser">Browser Print Dialog</option></select></div>
+    <div class="field"><label>Printer Name (optional)</label><input id="printerName" placeholder="Front Desk Printer"></div>
+   </div>
+   <div class="row"><button onclick="savePrinterSettings()">Save Printer Settings</button><button class="secondary" onclick="testPrinter()">Check Settings</button></div><div id="printerMsg" class="notice hidden"></div>
+  </div>
+ </section>
+
+ <section id="uploadApp" class="hidden">
+  <div class="card">
+   <h1>QR for Print — File Upload</h1><p>तपाईंले scan गर्नुभएको QR को लागि image, PDF वा document छान्नुहोस्। Upload भएपछि preview हेरेर print गर्न सक्नुहुन्छ।</p>
+   <div id="uploadMsg" class="notice">यो QR session जाँच हुँदैछ…</div>
+   <div class="field"><label>फाइल छान्नुहोस् (PDF, Image, DOC/DOCX)</label><input id="fileInput" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,application/pdf,image/*,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></div>
+   <div class="grid">
+    <div class="field"><label>Paper Size</label><select id="uploadPaper"><option>A4</option><option>Letter</option><option>Receipt (80mm)</option><option>Original</option></select></div>
+    <div class="field"><label>Copies</label><input id="uploadCopies" type="number" min="1" max="20" value="1"></div>
+   </div>
+   <div class="row"><button id="uploadBtn" onclick="uploadFile()">Upload File to Supabase</button><button class="secondary" onclick="clearFile()">Clear</button></div>
+   <div id="fileMeta" class="small" style="margin:10px 0"></div>
+  </div>
+  <div class="card"><h2>File Preview</h2><div id="previewArea"><p>फाइल छानेपछि Preview यहाँ देखिन्छ।</p></div><div class="row no-print" style="margin-top:12px"><button onclick="printUploaded()">Print</button><button class="secondary" onclick="downloadUploaded()">Download File</button></div><p class="small">PDF/image को Preview browser मा देखिन्छ। DOC/DOCX फाइल browser ले सिधै Preview गर्न नसक्न सक्छ; त्यसलाई डाउनलोड गरेर खोल्नुहोस्।</p></div>
+ </section>
+</main>
+<footer>QR for Print · Supabase Auth · Storage · Database</footer>
+<script>
+const $=id=>document.getElementById(id);
+let sb=null,user=null,activeSession=null,uploadedPath=null,uploadedUrl=null,objectUrl=null,qrPayload="",scanner=null;
+const MAX_FILE=25*1024*1024;
+function note(id,text,type=""){const e=$(id);e.textContent=text;e.className="notice"+(type?" "+type:"");e.classList.remove("hidden")}
+function hide(id){$(id).classList.add("hidden")}
+function toggleSql(){$("sqlWrap").classList.toggle("hidden")}
+function copySql(){navigator.clipboard?.writeText($("sqlText").textContent).then(()=>alert("SQL copied")).catch(()=>alert("SQL copy भएन; text manually copy गर्नुहोस्।"))}
+function normalizeUrl(v){let u;try{u=new URL(v.trim())}catch{throw Error("Supabase Project URL गलत छ।")}if(!["https:","http:"].includes(u.protocol))throw Error("Project URL https:// हुनुपर्छ।");return v.trim().replace(/\/+$/,"")}
+function connect(){
+ try{
+  const url=normalizeUrl($("sbUrl").value),key=$("sbKey").value.trim();
+  if(!key)throw Error("Publishable/anon key राख्नुहोस्।");
+  localStorage.setItem("qfp_url",url);localStorage.setItem("qfp_key",key);
+  init(url,key);
+ }catch(e){note("setupMsg",e.message,"error")}
+}
+async function init(url,key){
+ try{
+  if(!window.supabase)throw Error("Supabase library load भएन। इन्टरनेट जाँच्नुहोस्।");
+  sb=window.supabase.createClient(url,key);
+  const {data,error}=await sb.auth.getSession();if(error)throw error;
+  $("setup").classList.add("hidden");
+  const sessionId=new URLSearchParams(location.search).get("session")||location.hash.match(/session=([0-9a-f-]+)/i)?.[1];
+  if(sessionId){showUpload(sessionId);return}
+  if(data.session){user=data.session.user;showAdmin()}else $("auth").classList.remove("hidden");
+  sb.auth.onAuthStateChange((_event,session)=>{user=session?.user||null;if(user)showAdmin();else{$("adminApp").classList.add("hidden");$("auth").classList.remove("hidden");$("logoutBtn").classList.add("hidden")}});
+ }catch(e){note("setupMsg","Connect हुन सकेन: "+friendly(e),"error")}
+}
+function friendly(e){let m=e?.message||String(e);const detail=(e?.details||"");if(/row-level security|violates row-level security|permission denied/i.test(m+" "+detail))return "RLS policy ले रोक्यो। Admin login email र SQL allowlist email मिलाउनुहोस्। Dashboard मा ‘Copy Admin RLS Fix SQL’ थिचेर SQL Editor मा Run गर्नुहोस्। Original error: "+m;if(/failed to fetch|networkerror|load failed/i.test(m))return "Supabase सम्म पुग्न सकेन। Project URL/key, internet, paused project, ad-blocker/VPN जाँच्नुहोस्। HTML लाई HTTPS hosting वा localhost बाट चलाउनुहोस्।";return m}
+async function adminSignUp(){
+ const email=$("email").value.trim(),password=$("password").value;
+ if(!email||password.length<6){note("authMsg","Email राख्नुहोस् र password कम्तीमा 6 अक्षरको बनाउनुहोस्।","error");return}
+ try{const {data,error}=await sb.auth.signUp({email,password});if(error)throw error;note("authMsg",data.session?"Account बनेको छ। Admin policy मा यो email allowlist गरिएको हुनुपर्छ।":"Account request भयो। Email confirmation सक्रिय भए inbox confirm गर्नुहोस्। त्यसपछि Admin Login गर्नुहोस्।","success")}catch(e){note("authMsg",friendly(e),"error")}
+}
+async function adminSignIn(){
+ if(!sb){note("authMsg","पहिले Supabase Connect गर्नुहोस्।","error");return}
+ try{const {data,error}=await sb.auth.signInWithPassword({email:$("email").value.trim(),password:$("password").value});if(error)throw error;user=data.user;showAdmin()}catch(e){note("authMsg",friendly(e),"error")}
+}
+async function signOut(){if(sb)await sb.auth.signOut();user=null;$("adminApp").classList.add("hidden");$("auth").classList.remove("hidden")}
+function showAdmin(){
+ if(!user)return;
+ $("auth").classList.add("hidden");$("uploadApp").classList.add("hidden");$("adminApp").classList.remove("hidden");$("logoutBtn").classList.remove("hidden");$("userBadge").textContent=user.email||"Admin";
+ const saved=JSON.parse(localStorage.getItem("qfp_printer")||"{}");$("printerIp").value=saved.ip||"";$("printerPort").value=saved.port||"9100";$("printerProtocol").value=saved.protocol||"browser";$("printerName").value=saved.name||"";
+ loadSessions();
+}
+async function copyAdminPolicyFix(){
+ const email=(user?.email||"").trim().toLowerCase();
+ if(!email){alert("पहिले Admin Login गर्नुहोस्।");return}
+ const sql=`alter table public.print_sessions enable row level security;
+
+drop policy if exists "Admin can manage print sessions" on public.print_sessions;
+drop policy if exists "qr_admin_insert_sessions" on public.print_sessions;
+
+create policy "Admin can manage print sessions" on public.print_sessions
+for all to authenticated
+using (auth.uid() = admin_id and lower(coalesce(auth.jwt()->>'email','')) = lower('${email.replace(/'/g,"''")}'))
+with check (auth.uid() = admin_id and lower(coalesce(auth.jwt()->>'email','')) = lower('${email.replace(/'/g,"''")}'));`;
+ try{await navigator.clipboard.writeText(sql);alert("Admin RLS Fix SQL copied. Supabase → SQL Editor मा paste गरेर Run गर्नुहोस्।")}catch(e){const w=window.open("","_blank","width=760,height=520");if(w){w.document.write('<textarea style="width:98%;height:90%;font:14px monospace"></textarea>');w.document.querySelector('textarea').value=sql;w.document.close()}else alert(sql)}
+}
+async function generateSession(){
+ if(!user){note("adminMsg","पहिले Admin Login गर्नुहोस्।","error");return}
+ try{
+  const {data:authData,error:authError}=await sb.auth.getUser();
+  if(authError)throw authError;
+  if(!authData.user)throw Error("Login session सकिएको छ। Logout गरेर फेरि Admin Login गर्नुहोस्।");
+  user=authData.user;
+  const {data,error}=await sb.from("print_sessions").insert({admin_id:user.id,status:"waiting",paper_size:$("defaultPaper").value}).select("id,created_at,paper_size").single();
+  if(error)throw error;
+  const base=location.href.split("?")[0].split("#")[0];
+  qrPayload=base+"?session="+data.id;
+  $("qrcode").innerHTML="";new QRCode($("qrcode"),{text:qrPayload,width:200,height:200,colorDark:"#14213d",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});
+  $("qrLabel").textContent=($("counterName").value.trim()||"QR for Print")+" · "+data.id;
+  note("adminMsg","QR तयार भयो। यो page HTTPS hosting मा हुनुपर्छ ताकि फोनले scan गर्दा खोल्न सकोस्।","success");loadSessions();
+ }catch(e){note("adminMsg","QR बनाउन सकेन: "+friendly(e)+" SQL policies र admin email जाँच्नुहोस्।","error")}
+}
+function downloadQr(){const c=$("qrcode").querySelector("canvas");if(!c){alert("पहिले QR generate गर्नुहोस्।");return}const a=document.createElement("a");a.download="qr-for-print.png";a.href=c.toDataURL("image/png");a.click()}
+function printQr(){const c=$("qrcode").querySelector("canvas");if(!c){alert("पहिले QR generate गर्नुहोस्।");return}const w=window.open("","_blank");if(!w){alert("Popup अनुमति दिनुहोस्।");return}w.document.write('<html><body style="font-family:Arial;text-align:center;padding:24px"><h2>QR for Print</h2><img src="'+c.toDataURL()+'" width="240"><p>'+($("qrLabel").textContent||"")+'</p><script>onload=()=>print()<\/script></body></html>');w.document.close()}
+async function loadSessions(){
+ if(!sb||!user)return;
+ try{const {data,error}=await sb.from("print_sessions").select("id,status,file_name,file_size,created_at,paper_size").eq("admin_id",user.id).order("created_at",{ascending:false}).limit(20);if(error)throw error;
+  const q=$("queue");q.innerHTML="";
+  if(!data.length){q.innerHTML="<p>अहिलेसम्म QR session छैन।</p>";return}
+  data.forEach(s=>{const d=document.createElement("div");d.className="job";const info=document.createElement("div");const title=document.createElement("strong");title.textContent=s.file_name||"Waiting for upload";const sub=document.createElement("div");sub.className="small";sub.textContent=s.status+" · "+s.paper_size+" · "+new Date(s.created_at).toLocaleString()+" · "+s.id;info.append(title,sub);const actions=document.createElement("div");actions.className="row";const show=document.createElement("button");show.className="secondary";show.textContent="Open QR";show.onclick=()=>{qrPayload=location.href.split("?")[0].split("#")[0]+"?session="+s.id;$("qrcode").innerHTML="";new QRCode($("qrcode"),{text:qrPayload,width:200,height:200});$("qrLabel").textContent=s.id};actions.append(show);if(s.status==="uploaded"){const get=document.createElement("button");get.textContent="Open file";get.onclick=()=>openSessionFile(s.id);actions.append(get)}d.append(info,actions);q.append(d)});
+ }catch(e){$("queue").innerHTML="<p class='small'>Queue load भएन: "+friendly(e)+"</p>"}
+}
+async function openSessionFile(id){
+ try{const {data,error}=await sb.from("print_sessions").select("*").eq("id",id).single();if(error)throw error;if(!data.file_path)throw Error("अझै फाइल upload भएको छैन।");const {data:blob,error:be}=await sb.storage.from("print-files").createSignedUrl(data.file_path,3600);if(be)throw be;window.open(blob.signedUrl,"_blank","noopener")}catch(e){alert("File खोल्न सकेन: "+friendly(e))}
+}
+async function showUpload(id){
+ activeSession=id;$("auth").classList.add("hidden");$("adminApp").classList.add("hidden");$("uploadApp").classList.remove("hidden");$("logoutBtn").classList.add("hidden");$("userBadge").textContent="Guest upload";
+ try{const {data,error}=await sb.from("print_sessions").select("id,status,paper_size").eq("id",id).single();if(error)throw error; if(data.status!=="waiting"&&data.status!=="uploaded")throw Error("यो QR session सक्रिय छैन.");$("uploadPaper").value=data.paper_size||"A4";note("uploadMsg","QR मान्य छ। फाइल छानेर Upload गर्नुहोस्।","success")}catch(e){note("uploadMsg","QR session जाँच हुन सकेन: "+friendly(e),"error");$("uploadBtn").disabled=true}
+}
+$("fileInput").addEventListener("change",()=>{
+ const f=$("fileInput").files[0];if(!f)return;
+ if(f.size>MAX_FILE){note("uploadMsg","फाइल 25 MB भन्दा ठूलो छ। सानो फाइल छान्नुहोस्।","error");$("fileInput").value="";return}
+ $("fileMeta").textContent=f.name+" · "+(f.size/1024/1024).toFixed(2)+" MB · "+(f.type||"unknown type");
+ if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=URL.createObjectURL(f);
+ const area=$("previewArea");area.innerHTML="";
+ if(f.type.startsWith("image/")){const img=document.createElement("img");img.className="previewImage";img.src=objectUrl;area.append(img)}
+ else if(f.type==="application/pdf"||f.name.toLowerCase().endsWith(".pdf")){const iframe=document.createElement("iframe");iframe.className="preview";iframe.src=objectUrl;area.append(iframe)}
+ else{area.innerHTML="<p>यो file type browser मा direct preview हुँदैन। Upload गरेपछि Download गरेर Word/सम्बन्धित app मा खोल्नुहोस्।</p>"}
+});
+async function uploadFile(){
+ const f=$("fileInput").files[0];if(!f){note("uploadMsg","पहिले फाइल छान्नुहोस्।","error");return}
+ if(!activeSession){note("uploadMsg","QR session ID छैन। सही QR scan गर्नुहोस्।","error");return}
+ if(f.size>MAX_FILE){note("uploadMsg","फाइल 25 MB भन्दा ठूलो छ।","error");return}
+ const allowed=/\.(pdf|png|jpe?g|webp|gif|doc|docx)$/i;if(!allowed.test(f.name)){note("uploadMsg","PDF, image, DOC वा DOCX मात्र upload गर्न मिल्छ।","error");return}
+ $("uploadBtn").disabled=true;
+ try{
+  const safe=f.name.replace(/[^a-zA-Z0-9._-]/g,"_");const path=activeSession+"/"+Date.now()+"_"+safe;
+  const {error:upErr}=await sb.storage.from("print-files").upload(path,f,{upsert:false,contentType:f.type||"application/octet-stream"});if(upErr)throw upErr;
+  const {error:dbErr}=await sb.from("print_sessions").update({status:"uploaded",file_path:path,file_name:f.name,mime_type:f.type||null,file_size:f.size,paper_size:$("uploadPaper").value}).eq("id",activeSession);if(dbErr)throw dbErr;
+  uploadedPath=path;uploadedUrl=objectUrl;note("uploadMsg","Upload सफल भयो। अब Preview हेरेर Print थिच्नुहोस्।","success");
+ }catch(e){note("uploadMsg","Upload भएन: "+friendly(e)+" Storage bucket 'print-files' र policies जाँच्नुहोस्।","error")}finally{$("uploadBtn").disabled=false}
+}
+function clearFile(){ $("fileInput").value="";$("fileMeta").textContent="";$("previewArea").innerHTML="<p>फाइल छानेपछि Preview यहाँ देखिन्छ।</p>";if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=null}
+function printUploaded(){
+ const f=$("fileInput").files[0];if(!f){alert("पहिले file upload गर्नुहोस्।");return}
+ if(f.type.startsWith("image/")){const w=window.open(objectUrl,"_blank");if(!w){alert("Popup अनुमति दिनुहोस्।");return}setTimeout(()=>{try{w.focus();w.print()}catch(e){}},800)}
+ else if(f.type==="application/pdf"||f.name.toLowerCase().endsWith(".pdf")){const iframe=$("previewArea").querySelector("iframe");if(iframe){iframe.contentWindow.focus();iframe.contentWindow.print()}else window.print()}
+ else{alert("DOC/DOCX browser बाट सिधै print नहुन सक्छ। Download गरेर Word मा खोल्नुहोस्।")}
+ const copies=Math.max(1,Math.min(20,parseInt($("uploadCopies").value||"1",10)));if(copies>1)alert("Copies संख्या browser print dialog मा छान्नुहोस्।")
+}
+function downloadUploaded(){const f=$("fileInput").files[0];if(!f){alert("पहिले file छान्नुहोस्।");return}const a=document.createElement("a");a.href=objectUrl;a.download=f.name;a.click()}
+function savePrinterSettings(){const settings={ip:$("printerIp").value.trim(),port:$("printerPort").value.trim(),protocol:$("printerProtocol").value,name:$("printerName").value.trim()};localStorage.setItem("qfp_printer",JSON.stringify(settings));note("printerMsg","Printer settings यो browser मा save भयो। Direct print का लागि print bridge आवश्यक हुन सक्छ।","success")}
+function testPrinter(){const ip=$("printerIp").value.trim();const port=$("printerPort").value.trim();if(!ip||!port){note("printerMsg","Printer IP र port राख्नुहोस्।","error");return}note("printerMsg","Settings input मान्य देखिन्छ। Browser security ले यहाँबाट raw IP printer connectivity test वा print command गर्न दिँदैन।","success")}
+window.addEventListener("load",()=>{
+ const url=localStorage.getItem("qfp_url"),key=localStorage.getItem("qfp_key");
+ if(url&&key){$("sbUrl").value=url;$("sbKey").value=key;init(url,key)}
+ else if(location.protocol==="file:")note("setupMsg","यो फाइल file:// बाट खुलेको छ। QR फोनमा खोल्न र camera चलाउन HTTPS hosting वा localhost प्रयोग गर्नुहोस्।","error");
+});
+</script>
+</body></html>
