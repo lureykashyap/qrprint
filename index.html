@@ -145,14 +145,15 @@ create policy "Admin delete print-files" on storage.objects for delete to authen
 
  <section id="uploadApp" class="hidden">
   <div class="card">
-   <h1>QR for Print — File Upload</h1><p>तपाईंले scan गर्नुभएको QR को लागि image, PDF वा document छान्नुहोस्। Upload भएपछि preview हेरेर print गर्न सक्नुहुन्छ।</p>
+   <h1>Upload · Preview · Print</h1><p>QR scan भएपछि यही पेजमा फाइल छान्नुहोस्। फाइलको नाम, आकार र preview तुरुन्तै देखिन्छ। त्यसपछि Upload गरेर Print थिच्नुहोस्।</p>
    <div id="uploadMsg" class="notice">यो QR session जाँच हुँदैछ…</div>
    <div class="field"><label>फाइल छान्नुहोस् (PDF, Image, DOC/DOCX)</label><input id="fileInput" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.doc,.docx,application/pdf,image/*,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></div>
    <div class="grid">
     <div class="field"><label>Paper Size</label><select id="uploadPaper"><option>A4</option><option>Letter</option><option>Receipt (80mm)</option><option>Original</option></select></div>
     <div class="field"><label>Copies</label><input id="uploadCopies" type="number" min="1" max="20" value="1"></div>
    </div>
-   <div class="row"><button id="uploadBtn" onclick="uploadFile()">Upload File to Supabase</button><button class="secondary" onclick="clearFile()">Clear</button></div>
+   <div class="row"><button id="uploadBtn" onclick="uploadFile()">Upload File</button><button class="secondary" onclick="clearFile()">Clear</button></div>
+   <div class="small">फाइल छान्नेबित्तिकै preview र size देखिन्छ। Upload सफल भएपछि Print गर्न सकिन्छ।</div>
    <div id="fileMeta" class="small" style="margin:10px 0"></div>
   </div>
   <div class="card"><h2>File Preview</h2><div id="previewArea"><p>फाइल छानेपछि Preview यहाँ देखिन्छ।</p></div><div class="row no-print" style="margin-top:12px"><button onclick="printUploaded()">Print</button><button class="secondary" onclick="downloadUploaded()">Download File</button></div><p class="small">PDF/image को Preview browser मा देखिन्छ। DOC/DOCX फाइल browser ले सिधै Preview गर्न नसक्न सक्छ; त्यसलाई डाउनलोड गरेर खोल्नुहोस्।</p></div>
@@ -161,7 +162,7 @@ create policy "Admin delete print-files" on storage.objects for delete to authen
 <footer>QR for Print · Supabase Auth · Storage · Database</footer>
 <script>
 const $=id=>document.getElementById(id);
-let sb=null,user=null,activeSession=null,uploadedPath=null,uploadedUrl=null,objectUrl=null,qrPayload="",scanner=null;
+let sb=null,user=null,activeSession=null,uploadedPath=null,uploadedUrl=null,objectUrl=null,qrPayload="",scanner=null,uploadComplete=false;
 const MAX_FILE=25*1024*1024;
 function note(id,text,type=""){const e=$(id);e.textContent=text;e.className="notice"+(type?" "+type:"");e.classList.remove("hidden")}
 function hide(id){$(id).classList.add("hidden")}
@@ -229,8 +230,13 @@ async function generateSession(){
   const {data,error}=await sb.from("print_sessions").insert({admin_id:user.id,status:"waiting",paper_size:$("defaultPaper").value}).select("id,created_at,paper_size").single();
   if(error)throw error;
   const base=location.href.split("?")[0].split("#")[0];
-  qrPayload=base+"?session="+data.id;
-  $("qrcode").innerHTML="";new QRCode($("qrcode"),{text:qrPayload,width:200,height:200,colorDark:"#14213d",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});
+  // The Supabase anon/publishable key is intended for client-side use; RLS must protect all data.
+  const qrUrl=new URL(base,location.href);
+  qrUrl.searchParams.set("session",data.id);
+  qrUrl.searchParams.set("sburl",localStorage.getItem("qfp_url")||"");
+  qrUrl.searchParams.set("sbkey",localStorage.getItem("qfp_key")||"");
+  qrPayload=qrUrl.toString();
+  $("qrcode").innerHTML="";new QRCode($("qrcode"),{text:qrPayload,width:220,height:220,colorDark:"#14213d",colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M});
   $("qrLabel").textContent=($("counterName").value.trim()||"QR for Print")+" · "+data.id;
   note("adminMsg","QR तयार भयो। यो page HTTPS hosting मा हुनुपर्छ ताकि फोनले scan गर्दा खोल्न सकोस्।","success");loadSessions();
  }catch(e){note("adminMsg","QR बनाउन सकेन: "+friendly(e)+" SQL policies र admin email जाँच्नुहोस्।","error")}
@@ -242,7 +248,7 @@ async function loadSessions(){
  try{const {data,error}=await sb.from("print_sessions").select("id,status,file_name,file_size,created_at,paper_size").eq("admin_id",user.id).order("created_at",{ascending:false}).limit(20);if(error)throw error;
   const q=$("queue");q.innerHTML="";
   if(!data.length){q.innerHTML="<p>अहिलेसम्म QR session छैन।</p>";return}
-  data.forEach(s=>{const d=document.createElement("div");d.className="job";const info=document.createElement("div");const title=document.createElement("strong");title.textContent=s.file_name||"Waiting for upload";const sub=document.createElement("div");sub.className="small";sub.textContent=s.status+" · "+s.paper_size+" · "+new Date(s.created_at).toLocaleString()+" · "+s.id;info.append(title,sub);const actions=document.createElement("div");actions.className="row";const show=document.createElement("button");show.className="secondary";show.textContent="Open QR";show.onclick=()=>{qrPayload=location.href.split("?")[0].split("#")[0]+"?session="+s.id;$("qrcode").innerHTML="";new QRCode($("qrcode"),{text:qrPayload,width:200,height:200});$("qrLabel").textContent=s.id};actions.append(show);if(s.status==="uploaded"){const get=document.createElement("button");get.textContent="Open file";get.onclick=()=>openSessionFile(s.id);actions.append(get)}d.append(info,actions);q.append(d)});
+  data.forEach(s=>{const d=document.createElement("div");d.className="job";const info=document.createElement("div");const title=document.createElement("strong");title.textContent=s.file_name||"Waiting for upload";const sub=document.createElement("div");sub.className="small";sub.textContent=s.status+" · "+s.paper_size+" · "+new Date(s.created_at).toLocaleString()+" · "+s.id;info.append(title,sub);const actions=document.createElement("div");actions.className="row";const show=document.createElement("button");show.className="secondary";show.textContent="Open QR";show.onclick=()=>{const qrUrl=new URL(location.href.split("?")[0].split("#")[0],location.href);qrUrl.searchParams.set("session",s.id);qrUrl.searchParams.set("sburl",localStorage.getItem("qfp_url")||"");qrUrl.searchParams.set("sbkey",localStorage.getItem("qfp_key")||"");qrPayload=qrUrl.toString();$("qrcode").innerHTML="";new QRCode($("qrcode"),{text:qrPayload,width:220,height:220});$("qrLabel").textContent=s.id};actions.append(show);if(s.status==="uploaded"){const get=document.createElement("button");get.textContent="Open file";get.onclick=()=>openSessionFile(s.id);actions.append(get)}d.append(info,actions);q.append(d)});
  }catch(e){$("queue").innerHTML="<p class='small'>Queue load भएन: "+friendly(e)+"</p>"}
 }
 async function openSessionFile(id){
@@ -255,7 +261,9 @@ async function showUpload(id){
 $("fileInput").addEventListener("change",()=>{
  const f=$("fileInput").files[0];if(!f)return;
  if(f.size>MAX_FILE){note("uploadMsg","फाइल 25 MB भन्दा ठूलो छ। सानो फाइल छान्नुहोस्।","error");$("fileInput").value="";return}
- $("fileMeta").textContent=f.name+" · "+(f.size/1024/1024).toFixed(2)+" MB · "+(f.type||"unknown type");
+ note("uploadMsg","फाइल तयार छ। Preview/size जाँचेर Upload File थिच्नुहोस्।");
+ $("fileMeta").textContent="File: "+f.name+" · Size: "+(f.size/1024/1024).toFixed(2)+" MB ("+f.size.toLocaleString()+" bytes) · Type: "+(f.type||"unknown type");
+ uploadComplete=false;uploadedPath=null;
  if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=URL.createObjectURL(f);
  const area=$("previewArea");area.innerHTML="";
  if(f.type.startsWith("image/")){const img=document.createElement("img");img.className="previewImage";img.src=objectUrl;area.append(img)}
@@ -272,12 +280,13 @@ async function uploadFile(){
   const safe=f.name.replace(/[^a-zA-Z0-9._-]/g,"_");const path=activeSession+"/"+Date.now()+"_"+safe;
   const {error:upErr}=await sb.storage.from("print-files").upload(path,f,{upsert:false,contentType:f.type||"application/octet-stream"});if(upErr)throw upErr;
   const {error:dbErr}=await sb.from("print_sessions").update({status:"uploaded",file_path:path,file_name:f.name,mime_type:f.type||null,file_size:f.size,paper_size:$("uploadPaper").value}).eq("id",activeSession);if(dbErr)throw dbErr;
-  uploadedPath=path;uploadedUrl=objectUrl;note("uploadMsg","Upload सफल भयो। अब Preview हेरेर Print थिच्नुहोस्।","success");
+  uploadedPath=path;uploadedUrl=objectUrl;uploadComplete=true;note("uploadMsg","Upload सफल भयो। अब Print थिच्नुहोस्।","success");
  }catch(e){note("uploadMsg","Upload भएन: "+friendly(e)+" Storage bucket 'print-files' र policies जाँच्नुहोस्।","error")}finally{$("uploadBtn").disabled=false}
 }
-function clearFile(){ $("fileInput").value="";$("fileMeta").textContent="";$("previewArea").innerHTML="<p>फाइल छानेपछि Preview यहाँ देखिन्छ।</p>";if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=null}
+function clearFile(){ $("fileInput").value="";$("fileMeta").textContent="";$("previewArea").innerHTML="<p>फाइल छानेपछि Preview यहाँ देखिन्छ।</p>";if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=null;uploadedPath=null;uploadComplete=false;note("uploadMsg","फाइल छान्नुहोस्।")}
 function printUploaded(){
- const f=$("fileInput").files[0];if(!f){alert("पहिले file upload गर्नुहोस्।");return}
+ const f=$("fileInput").files[0];if(!f){alert("पहिले file छान्नुहोस्।");return}
+ if(!uploadComplete){alert("पहिले Upload File थिचेर upload पूरा गर्नुहोस्।");return}
  if(f.type.startsWith("image/")){const w=window.open(objectUrl,"_blank");if(!w){alert("Popup अनुमति दिनुहोस्।");return}setTimeout(()=>{try{w.focus();w.print()}catch(e){}},800)}
  else if(f.type==="application/pdf"||f.name.toLowerCase().endsWith(".pdf")){const iframe=$("previewArea").querySelector("iframe");if(iframe){iframe.contentWindow.focus();iframe.contentWindow.print()}else window.print()}
  else{alert("DOC/DOCX browser बाट सिधै print नहुन सक्छ। Download गरेर Word मा खोल्नुहोस्।")}
@@ -287,9 +296,21 @@ function downloadUploaded(){const f=$("fileInput").files[0];if(!f){alert("पह
 function savePrinterSettings(){const settings={ip:$("printerIp").value.trim(),port:$("printerPort").value.trim(),protocol:$("printerProtocol").value,name:$("printerName").value.trim()};localStorage.setItem("qfp_printer",JSON.stringify(settings));note("printerMsg","Printer settings यो browser मा save भयो। Direct print का लागि print bridge आवश्यक हुन सक्छ।","success")}
 function testPrinter(){const ip=$("printerIp").value.trim();const port=$("printerPort").value.trim();if(!ip||!port){note("printerMsg","Printer IP र port राख्नुहोस्।","error");return}note("printerMsg","Settings input मान्य देखिन्छ। Browser security ले यहाँबाट raw IP printer connectivity test वा print command गर्न दिँदैन।","success")}
 window.addEventListener("load",()=>{
- const url=localStorage.getItem("qfp_url"),key=localStorage.getItem("qfp_key");
- if(url&&key){$("sbUrl").value=url;$("sbKey").value=key;init(url,key)}
- else if(location.protocol==="file:")note("setupMsg","यो फाइल file:// बाट खुलेको छ। QR फोनमा खोल्न र camera चलाउन HTTPS hosting वा localhost प्रयोग गर्नुहोस्।","error");
+ const params=new URLSearchParams(location.search);
+ // QR contains the project's public URL and anon/publishable key so customer phones
+ // do not depend on the admin computer's localStorage.
+ const urlFromQr=params.get("sburl");
+ const keyFromQr=params.get("sbkey");
+ const url=urlFromQr||localStorage.getItem("qfp_url");
+ const key=keyFromQr||localStorage.getItem("qfp_key");
+ if(url&&key){
+  try{localStorage.setItem("qfp_url",url);localStorage.setItem("qfp_key",key)}catch(e){}
+  $("sbUrl").value=url;$("sbKey").value=key;init(url,key);
+ }else{
+  if(location.protocol==="file:")note("setupMsg","फोनबाट QR scan गर्न HTML लाई HTTPS hosting मा राख्नुहोस्। QR ले Supabase project URL र public anon key पनि बोक्छ, त्यसैले customer फोनमा छुट्टै setup गर्नुपर्दैन।","error");
+  const sessionId=params.get("session");
+  if(sessionId)note("setupMsg","यो QR मा Supabase configuration छैन। Admin computer मा URL/key Connect गरेर नयाँ QR generate गर्नुहोस्।","error");
+ }
 });
 </script>
 </body></html>
